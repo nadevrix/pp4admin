@@ -234,13 +234,14 @@ function WalletTable({
       <div className="md:hidden divide-y divide-[#e5e7eb]">
         {wallets.map(w => {
           const b = balances[w.public_key];
+          const isPool = w.wallet_type === 'pool';
           return (
             <div key={w.public_key} className="p-4">
               <div className="flex items-center justify-between mb-2 gap-2">
                 <span className="text-xs text-[#9ca3af] font-mono shrink-0">
                   {w.wallet_index !== null ? `#${w.wallet_index}` : 'treasury'}
                 </span>
-                <LockBadge locked={w.is_locked} />
+                {isPool && <LockBadge locked={w.is_locked} />}
                 {b && <XlmBadge status={b.xlm_status} />}
               </div>
               <a
@@ -289,6 +290,7 @@ function WalletTable({
           <tbody>
             {wallets.map(w => {
               const b = balances[w.public_key];
+              const isPool = w.wallet_type === 'pool';
               return (
                 <tr key={w.public_key} className="border-b border-[#e5e7eb] last:border-0">
                   <td className="px-5 py-3 text-xs text-[#6b7280] font-mono">
@@ -306,7 +308,7 @@ function WalletTable({
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <LockBadge locked={w.is_locked} />
+                      {isPool && <LockBadge locked={w.is_locked} />}
                       {b && <XlmBadge status={b.xlm_status} />}
                     </div>
                   </td>
