@@ -8,7 +8,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { COOKIE_NAME, isValidSessionCookieValue } from '@/lib/admin-cookie';
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // /admin/login es público (sin cookie)
@@ -30,7 +30,7 @@ export function middleware(request: NextRequest) {
   }
 
   const cookie = request.cookies.get(COOKIE_NAME)?.value;
-  if (isValidSessionCookieValue(cookie)) {
+  if (await isValidSessionCookieValue(cookie)) {
     return NextResponse.next();
   }
 

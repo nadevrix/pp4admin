@@ -23,7 +23,7 @@ export async function POST(request: Request) {
 
   let cookieValue: string;
   try {
-    cookieValue = createSessionCookieValue();
+    cookieValue = await createSessionCookieValue();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: `Server misconfig: ${msg}` }, { status: 500 });
