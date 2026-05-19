@@ -63,19 +63,29 @@ export default function AdminAnomaliesPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Anomalías</h1>
-          <p className="text-[#6b7280] text-sm mt-1">
-            Transacciones con <code className="text-xs bg-[#f0f7ff] px-1.5 py-0.5 rounded">forward_status=failed</code> — fondos del cliente colgados en pool wallets.
-          </p>
+      <header className="mb-6 sm:mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+          <div>
+            <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-1.5">
+              <span>Pollar Pay</span>
+              <span className="text-[#e5e7eb]">·</span>
+              <span>Fondos a recuperar</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Anomalías</h1>
+            <p className="text-[#6b7280] text-sm mt-1">
+              Transacciones con <code className="text-xs bg-[#f0f7ff] px-1.5 py-0.5 rounded">forward_status=failed</code> — fondos del cliente colgados en pool wallets.
+            </p>
+          </div>
+          <button
+            onClick={load}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-[#e5e7eb] hover:bg-[#f0f7ff] text-[#005DB4] text-xs font-medium transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Refrescar
+          </button>
         </div>
-        <button
-          onClick={load}
-          className="text-xs px-3 py-1.5 rounded-lg bg-[#f0f7ff] hover:bg-[#e0f0ff] text-[#005DB4] font-medium"
-        >
-          Refrescar
-        </button>
       </header>
 
       {error && (

@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState } from 'react';
 
 export default function AdminLoginPage() {
@@ -31,11 +32,26 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#f0f7ff] flex items-center justify-center px-4">
+    <main className="relative min-h-screen flex items-center justify-center px-4 py-12 bg-[#f0f7ff] overflow-hidden">
+      {/* Halo azul Pollar — mismo gesto que la landing */}
+      <div
+        className="absolute inset-0 -z-10 opacity-70 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(800px 400px at 50% 0%, rgba(0,93,180,0.18), transparent 70%)',
+        }}
+      />
+
       <div className="w-full max-w-sm">
-        <div className="text-center mb-6">
-          <div className="inline-block text-xs font-mono tracking-widest uppercase text-[#9ca3af] mb-2">
-            Pollar · Admin
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 mb-4">
+            <Image src="/logo.jpg" alt="Pollar" width={40} height={40} priority className="rounded-xl shadow-sm" />
+            <div className="flex flex-col items-start leading-none">
+              <span className="font-semibold tracking-tight text-lg">Pollar Pay</span>
+              <span className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mt-0.5">
+                Admin
+              </span>
+            </div>
           </div>
           <h1 className="text-2xl font-bold tracking-tight">Panel interno</h1>
           <p className="text-sm text-[#6b7280] mt-1">
@@ -45,7 +61,7 @@ export default function AdminLoginPage() {
 
         <form
           onSubmit={onSubmit}
-          className="bg-white border border-[#e5e7eb] rounded-2xl p-6 shadow-sm"
+          className="bg-white border border-[#e5e7eb] rounded-2xl p-6 sm:p-7 shadow-sm"
         >
           <label className="block text-sm font-medium text-[#6b7280] mb-1.5">
             Clave de acceso
@@ -57,12 +73,16 @@ export default function AdminLoginPage() {
             autoFocus
             required
             autoComplete="current-password"
-            className="w-full px-4 py-2.5 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-[#1a1a1a] focus:outline-none focus:border-[#005DB4] focus:ring-1 focus:ring-[#005DB4] font-mono"
+            placeholder="••••••••••••••"
+            className="w-full px-4 py-2.5 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-[#1a1a1a] focus:outline-none focus:border-[#005DB4] focus:ring-1 focus:ring-[#005DB4] font-mono placeholder:text-[#9ca3af]"
           />
 
           {error && (
-            <div className="mt-3 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-700 text-xs">
-              {error}
+            <div className="mt-3 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-700 text-xs flex items-start gap-2">
+              <svg className="w-3.5 h-3.5 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M4.93 19h14.14a2 2 0 001.74-3L13.74 4a2 2 0 00-3.48 0L3.19 16a2 2 0 001.74 3z" />
+              </svg>
+              <span>{error}</span>
             </div>
           )}
 
@@ -75,8 +95,11 @@ export default function AdminLoginPage() {
           </button>
         </form>
 
-        <p className="text-center text-xs text-[#9ca3af] mt-4">
-          Sesión válida por 8 horas.
+        <p className="text-center text-xs text-[#9ca3af] mt-5 flex items-center justify-center gap-1.5">
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 11c0-1.66 1.34-3 3-3s3 1.34 3 3v3M6 11v-3a6 6 0 1112 0v3m-6 4v2m-7-2a2 2 0 012-2h10a2 2 0 012 2v6a2 2 0 01-2 2H7a2 2 0 01-2-2v-6z" />
+          </svg>
+          Sesión válida por 8 horas
         </p>
       </div>
     </main>

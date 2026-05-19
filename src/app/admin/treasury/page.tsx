@@ -99,7 +99,12 @@ export default function AdminTreasuryPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl">
-      <header className="mb-6">
+      <header className="mb-6 sm:mb-8">
+        <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-1.5">
+          <span>Pollar Pay</span>
+          <span className="text-[#e5e7eb]">·</span>
+          <span>Caja del sistema</span>
+        </div>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Treasury</h1>
         <p className="text-[#6b7280] text-sm mt-1">
           Wallet que recibe fees + excedentes de overpaids. Desde acá se emiten reembolsos manuales a clientes que pagaron de más.
@@ -113,7 +118,7 @@ export default function AdminTreasuryPage() {
       )}
 
       <section className="bg-white border border-[#e5e7eb] rounded-2xl p-5 sm:p-6 mb-6">
-        <h2 className="font-semibold mb-3">Estado</h2>
+        <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-3">Estado</h2>
         {status === null ? (
           <div className="text-[#9ca3af] text-sm">Cargando…</div>
         ) : status.exists ? (
@@ -161,7 +166,7 @@ export default function AdminTreasuryPage() {
       </section>
 
       <section className="bg-white border border-[#e5e7eb] rounded-2xl p-5 sm:p-6">
-        <h2 className="font-semibold mb-1">Reembolso manual</h2>
+        <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-1">Reembolso manual</h2>
         <p className="text-xs text-[#6b7280] mb-4">
           Se envían los fondos desde la treasury al destinatario, y la transacción queda marcada como <code className="bg-[#f0f7ff] px-1 rounded">refunded</code>.
         </p>
