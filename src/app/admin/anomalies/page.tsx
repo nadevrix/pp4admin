@@ -9,27 +9,43 @@ interface AnomalyTx {
   forward_status: string;
   amount_expected: string;
   amount_paid: string;
+  excess: string;
   wallet_pubkey: string | null;
   created_at: string;
   expires_at: string;
   project_id: string;
   project_name: string | null;
   reason: string;
+  support_resolved_at: string | null;
+}
+
+interface AnomaliesResp {
+  data: {
+    forward_failures: AnomalyTx[];
+    overpayments: AnomalyTx[];
+    recently_resolved: AnomalyTx[];
+    counts: { forward_failures: number; overpayments: number; recently_resolved: number };
+  };
 }
 
 const NETWORK = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'TESTNET').toUpperCase();
 const EXPERT_SEG = NETWORK === 'MAINNET' ? 'public' : 'testnet';
 
 export default function AdminAnomaliesPage() {
-  const [rows, setRows] = useState<AnomalyTx[] | null>(null);
+  const [forwardFailures, setForwardFailures] = useState<AnomalyTx[] | null>(null);
+  const [overpayments, setOverpayments] = useState<AnomalyTx[] | null>(null);
+  const [recentlyResolved, setRecentlyResolved] = useState<AnomalyTx[] | null>(null);
+  const [showResolved, setShowResolved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const [retryMsg, setRetryMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await adminFetch<{ data: { transactions: AnomalyTx[] } }>('/api/proxy/anomalies');
-      setRows(r.data.transactions);
+      const r = await adminFetch<AnomaliesResp>('/api/proxy/anomalies');
+      setForwardFailures(r.data.forward_failures);
+      setOverpayments(r.data.overpayments);
+      setRecentlyResolved(r.data.recently_resolved);
       setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -42,22 +58,50 @@ export default function AdminAnomaliesPage() {
     return () => clearInterval(t);
   }, [load]);
 
-  const retry = async (id: string) => {
+  const flash = (kind: 'ok' | 'err', text: string) => {
+    setToast({ kind, text });
+    setTimeout(() => setToast(null), 4500);
+  };
+
+  const retryForward = async (id: string) => {
     if (!confirm('¿Reintentar el forward de esta transacción?\n\nSe va a intentar mandar los fondos colgados al payout_wallet del comercio. Si pasa, la wallet del pool se libera.')) return;
-    setRetrying(id);
-    setRetryMsg(null);
+    setBusyId(id);
     try {
       const r = await adminFetch<{ success: boolean; status: string; error?: string }>(`/api/proxy/tx/${id}/retry-forward`, { method: 'POST' });
-      if (r.success) {
-        setRetryMsg({ kind: 'ok', text: `Tx ${id.slice(0, 8)}… → ${r.status}` });
-      } else {
-        setRetryMsg({ kind: 'err', text: `Tx ${id.slice(0, 8)}…: ${r.error || r.status}` });
-      }
+      flash(r.success ? 'ok' : 'err', r.success ? `Tx ${id.slice(0, 8)}… → ${r.status}` : `${r.error || r.status}`);
       await load();
     } catch (e: unknown) {
-      setRetryMsg({ kind: 'err', text: e instanceof Error ? e.message : String(e) });
+      flash('err', e instanceof Error ? e.message : String(e));
     } finally {
-      setRetrying(null);
+      setBusyId(null);
+    }
+  };
+
+  const markResolved = async (id: string) => {
+    if (!confirm('¿Marcar este caso como resuelto manualmente?\n\nSe oculta de esta lista. Si lo hiciste por error, podés deshacer desde "Resueltos recientemente" abajo.')) return;
+    setBusyId(id);
+    try {
+      await adminFetch(`/api/proxy/tx/${id}/mark-resolved`, { method: 'POST' });
+      flash('ok', `Tx ${id.slice(0, 8)}… marcada como resuelta`);
+      await load();
+    } catch (e: unknown) {
+      flash('err', e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const undoResolved = async (id: string) => {
+    if (!confirm('¿Deshacer? Esta tx vuelve a aparecer como pendiente en la lista de arriba.')) return;
+    setBusyId(id);
+    try {
+      await adminFetch(`/api/proxy/tx/${id}/mark-resolved`, { method: 'DELETE' });
+      flash('ok', `Tx ${id.slice(0, 8)}… vuelve a pendiente`);
+      await load();
+    } catch (e: unknown) {
+      flash('err', e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -69,11 +113,11 @@ export default function AdminAnomaliesPage() {
             <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-1.5">
               <span>Pollar Pay</span>
               <span className="text-[#e5e7eb]">·</span>
-              <span>Fondos a recuperar</span>
+              <span>Requiere acción manual</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Anomalías</h1>
             <p className="text-[#6b7280] text-sm mt-1">
-              Transacciones con <code className="text-xs bg-[#f0f7ff] px-1.5 py-0.5 rounded">forward_status=failed</code> — fondos del cliente colgados en pool wallets.
+              Forwards fallidos (fondos colgados en pool) + overpaids pendientes de revisión con el cliente.
             </p>
           </div>
           <button
@@ -89,131 +133,294 @@ export default function AdminAnomaliesPage() {
       </header>
 
       {error && (
-        <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-700 text-sm">
-          {error}
-        </div>
+        <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-700 text-sm">{error}</div>
       )}
 
-      {retryMsg && (
-        <div
-          className={`mb-4 p-3 rounded-lg border text-sm ${
-            retryMsg.kind === 'ok'
-              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700'
-              : 'bg-rose-500/10 border-rose-500/20 text-rose-700'
-          }`}
-        >
-          {retryMsg.text}
-        </div>
+      {toast && (
+        <div className={`mb-4 p-3 rounded-lg border text-sm ${
+          toast.kind === 'ok'
+            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700'
+            : 'bg-rose-500/10 border-rose-500/20 text-rose-700'
+        }`}>{toast.text}</div>
       )}
 
-      {rows === null ? (
-        <div className="text-[#9ca3af] text-sm">Cargando…</div>
-      ) : rows.length === 0 ? (
-        <div className="bg-white border border-[#e5e7eb] rounded-2xl p-10 text-center">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/30 mb-3">
-            <svg className="w-6 h-6 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <h2 className="font-semibold mb-1">Sin anomalías pendientes</h2>
-          <p className="text-sm text-[#6b7280]">Todos los forwards salieron OK.</p>
+      {/* ── SECCIÓN 1: Forwards fallidos ─────────────────────────────── */}
+      <section className="mb-8">
+        <div className="flex items-end justify-between mb-3 px-1">
+          <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono">
+            Forwards fallidos — fondos colgados en pool
+            {forwardFailures && forwardFailures.length > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 rounded-full bg-rose-500/10 text-rose-700 text-[10px] font-bold">
+                {forwardFailures.length}
+              </span>
+            )}
+          </h2>
         </div>
-      ) : (
-        <div className="bg-white border border-[#e5e7eb] rounded-2xl overflow-hidden">
-          {/* Mobile */}
-          <div className="md:hidden divide-y divide-[#e5e7eb]">
-            {rows.map(t => (
-              <div key={t.id} className="p-4 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">{t.reason || '—'}</div>
-                    <div className="text-xs text-[#9ca3af] truncate">
-                      {t.project_name || t.project_id.slice(0, 8)} · {fmtDate(t.created_at)}
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border bg-rose-500/10 border-rose-500/20 text-rose-700">
-                    {t.forward_status}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-[#6b7280]">Recibido</span>
-                  <span className="font-mono">{parseFloat(t.amount_paid).toFixed(2)} / {parseFloat(t.amount_expected).toFixed(2)} USDC</span>
-                </div>
-                {t.wallet_pubkey && (
-                  <a
-                    href={`https://stellar.expert/explorer/${EXPERT_SEG}/account/${t.wallet_pubkey}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block font-mono text-[11px] text-[#005DB4] break-all"
-                  >
-                    {t.wallet_pubkey.slice(0, 10)}…{t.wallet_pubkey.slice(-6)} ↗
-                  </a>
-                )}
-                <button
-                  onClick={() => retry(t.id)}
-                  disabled={retrying === t.id}
-                  className="w-full text-xs px-3 py-1.5 rounded-md bg-[#005DB4] hover:bg-[#0047a0] text-white font-medium disabled:opacity-50"
-                >
-                  {retrying === t.id ? 'Reintentando…' : 'Reintentar forward'}
-                </button>
-              </div>
-            ))}
-          </div>
 
-          {/* Desktop */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-[#9ca3af] border-b border-[#e5e7eb]">
-                  <th className="px-5 py-3 font-medium">Tx</th>
-                  <th className="px-5 py-3 font-medium">Sucursal</th>
-                  <th className="px-5 py-3 font-medium">Motivo</th>
-                  <th className="px-5 py-3 font-medium text-right">Recibido / Esperado</th>
-                  <th className="px-5 py-3 font-medium">Pool wallet</th>
-                  <th className="px-5 py-3 font-medium">Fecha</th>
-                  <th className="px-5 py-3 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(t => (
-                  <tr key={t.id} className="border-b border-[#e5e7eb] last:border-0">
-                    <td className="px-5 py-3 font-mono text-xs text-[#6b7280]">{t.id.slice(0, 8)}…</td>
-                    <td className="px-5 py-3 text-xs">{t.project_name || '—'}</td>
-                    <td className="px-5 py-3 text-xs text-[#6b7280] max-w-[200px] truncate">{t.reason}</td>
-                    <td className="px-5 py-3 text-right font-mono text-xs">
-                      {parseFloat(t.amount_paid).toFixed(2)} / {parseFloat(t.amount_expected).toFixed(2)}
-                    </td>
-                    <td className="px-5 py-3 text-xs">
-                      {t.wallet_pubkey ? (
-                        <a
-                          href={`https://stellar.expert/explorer/${EXPERT_SEG}/account/${t.wallet_pubkey}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[#005DB4] hover:text-[#0047a0] font-mono"
-                        >
-                          {t.wallet_pubkey.slice(0, 8)}…↗
-                        </a>
-                      ) : (
-                        <span className="text-[#9ca3af]">—</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-xs text-[#9ca3af] whitespace-nowrap">{fmtDate(t.created_at)}</td>
-                    <td className="px-5 py-3 text-right">
-                      <button
-                        onClick={() => retry(t.id)}
-                        disabled={retrying === t.id}
-                        className="text-xs px-2.5 py-1 rounded-md bg-[#005DB4] hover:bg-[#0047a0] text-white font-medium disabled:opacity-50"
-                      >
-                        {retrying === t.id ? '…' : 'Reintentar'}
-                      </button>
-                    </td>
-                  </tr>
+        {forwardFailures === null ? (
+          <div className="bg-white border border-[#e5e7eb] rounded-2xl p-5 text-[#9ca3af] text-sm">Cargando…</div>
+        ) : forwardFailures.length === 0 ? (
+          <div className="bg-white border border-emerald-500/20 rounded-2xl p-5 text-center text-sm text-[#6b7280]">
+            ✓ Todos los forwards salieron OK
+          </div>
+        ) : (
+          <div className="bg-white border border-[#e5e7eb] rounded-2xl overflow-hidden">
+            <div className="divide-y divide-[#e5e7eb]">
+              {forwardFailures.map(tx => (
+                <ForwardFailureRow
+                  key={tx.id}
+                  tx={tx}
+                  onRetry={retryForward}
+                  onResolved={markResolved}
+                  busy={busyId === tx.id}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ── SECCIÓN 2: Overpaids ────────────────────────────────────── */}
+      <section className="mb-8">
+        <div className="flex items-end justify-between mb-3 px-1">
+          <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono">
+            Overpaids — clientes que pagaron de más
+            {overpayments && overpayments.length > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700 text-[10px] font-bold">
+                {overpayments.length}
+              </span>
+            )}
+          </h2>
+        </div>
+
+        {overpayments === null ? (
+          <div className="bg-white border border-[#e5e7eb] rounded-2xl p-5 text-[#9ca3af] text-sm">Cargando…</div>
+        ) : overpayments.length === 0 ? (
+          <div className="bg-white border border-emerald-500/20 rounded-2xl p-5 text-center text-sm text-[#6b7280]">
+            ✓ Ningún overpaid pendiente
+          </div>
+        ) : (
+          <>
+            <p className="text-xs text-[#9ca3af] mb-2 px-1">
+              El excedente quedó en la treasury. Contactá al cliente (whatsapp / soporte) y marcá como <b>Comprobado</b> cuando lo resolviste off-system.
+            </p>
+            <div className="bg-white border border-[#e5e7eb] rounded-2xl overflow-hidden">
+              <div className="divide-y divide-[#e5e7eb]">
+                {overpayments.map(tx => (
+                  <OverpaymentRow
+                    key={tx.id}
+                    tx={tx}
+                    onResolved={markResolved}
+                    busy={busyId === tx.id}
+                  />
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* ── SECCIÓN 3: Resueltos recientemente (deshacer) ─────────── */}
+      <section>
+        <button
+          type="button"
+          onClick={() => setShowResolved(s => !s)}
+          className="flex items-end justify-between w-full mb-3 px-1 text-left"
+        >
+          <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono">
+            Resueltos recientemente
+            {recentlyResolved && recentlyResolved.length > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 rounded-full bg-[#f0f7ff] text-[#6b7280] text-[10px] font-bold">
+                {recentlyResolved.length}
+              </span>
+            )}
+          </h2>
+          <span className="text-[10px] text-[#005DB4] font-mono">
+            {showResolved ? 'Ocultar ▲' : 'Mostrar ▼'}
+          </span>
+        </button>
+
+        {showResolved && (
+          recentlyResolved === null ? (
+            <div className="bg-white border border-[#e5e7eb] rounded-2xl p-5 text-[#9ca3af] text-sm">Cargando…</div>
+          ) : recentlyResolved.length === 0 ? (
+            <div className="bg-white border border-[#e5e7eb] rounded-2xl p-5 text-center text-sm text-[#9ca3af]">
+              Sin resoluciones recientes
+            </div>
+          ) : (
+            <div className="bg-white border border-[#e5e7eb] rounded-2xl overflow-hidden">
+              <div className="divide-y divide-[#e5e7eb]">
+                {recentlyResolved.map(tx => (
+                  <ResolvedRow
+                    key={tx.id}
+                    tx={tx}
+                    onUndo={undoResolved}
+                    busy={busyId === tx.id}
+                  />
+                ))}
+              </div>
+            </div>
+          )
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ResolvedRow({
+  tx,
+  onUndo,
+  busy,
+}: {
+  tx: AnomalyTx;
+  onUndo: (id: string) => void;
+  busy: boolean;
+}) {
+  const paid = parseFloat(tx.amount_paid);
+  const expected = parseFloat(tx.amount_expected);
+  const excess = parseFloat(tx.excess);
+  const isOverpaid = tx.status === 'overpaid';
+  const isForwardFail = tx.forward_status === 'failed';
+  return (
+    <div className="p-3 flex flex-col sm:flex-row sm:items-center gap-2 opacity-80">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+          <span className="text-xs text-[#1a1a1a] truncate">
+            {tx.project_name || tx.project_id.slice(0, 8)} · {tx.reason || '—'}
+          </span>
+          {isOverpaid && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border bg-amber-500/10 border-amber-500/20 text-amber-700">
+              overpaid
+            </span>
+          )}
+          {isForwardFail && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border bg-rose-500/10 border-rose-500/20 text-rose-700">
+              forward failed
+            </span>
+          )}
+          <span className="text-[10px] px-1.5 py-0.5 rounded border bg-emerald-500/10 border-emerald-500/20 text-emerald-700">
+            ✓ resuelto
+          </span>
         </div>
-      )}
+        <div className="text-[11px] text-[#9ca3af]">
+          <span className="font-mono">{paid.toFixed(2)} / {expected.toFixed(2)} USDC</span>
+          {excess > 0 && <span className="ml-2">· +{excess.toFixed(2)} excedente</span>}
+          {tx.support_resolved_at && (
+            <span className="ml-2">· resuelto {fmtDate(tx.support_resolved_at)}</span>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={() => onUndo(tx.id)}
+        disabled={busy}
+        className="text-xs px-3 py-1 rounded-md bg-[#f0f7ff] hover:bg-[#e0f0ff] text-[#005DB4] font-medium disabled:opacity-50 shrink-0"
+      >
+        {busy ? '…' : 'Deshacer'}
+      </button>
+    </div>
+  );
+}
+
+function ForwardFailureRow({
+  tx,
+  onRetry,
+  onResolved,
+  busy,
+}: {
+  tx: AnomalyTx;
+  onRetry: (id: string) => void;
+  onResolved: (id: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
+          <span className="text-xs font-medium text-[#1a1a1a] truncate">
+            {tx.project_name || tx.project_id.slice(0, 8)}
+          </span>
+          <span className="text-xs text-[#9ca3af]">·</span>
+          <span className="text-xs text-[#6b7280] truncate">{tx.reason || '—'}</span>
+          <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border bg-rose-500/10 border-rose-500/20 text-rose-700">
+            {tx.forward_status}
+          </span>
+        </div>
+        <div className="text-xs text-[#6b7280]">
+          Recibido <span className="font-mono text-[#1a1a1a]">{parseFloat(tx.amount_paid).toFixed(2)}</span> / {parseFloat(tx.amount_expected).toFixed(2)} USDC
+          <span className="text-[#9ca3af] ml-2">{fmtDate(tx.created_at)}</span>
+        </div>
+        {tx.wallet_pubkey && (
+          <a
+            href={`https://stellar.expert/explorer/${EXPERT_SEG}/account/${tx.wallet_pubkey}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block font-mono text-[11px] text-[#005DB4] truncate mt-1"
+          >
+            pool: {tx.wallet_pubkey.slice(0, 10)}…{tx.wallet_pubkey.slice(-6)} ↗
+          </a>
+        )}
+        <div className="text-[10px] text-[#9ca3af] font-mono mt-1 truncate">tx {tx.id}</div>
+      </div>
+      <div className="flex gap-2 shrink-0">
+        <button
+          onClick={() => onRetry(tx.id)}
+          disabled={busy}
+          className="text-xs px-3 py-1.5 rounded-md bg-[#005DB4] hover:bg-[#0047a0] text-white font-medium disabled:opacity-50"
+        >
+          {busy ? '…' : 'Reintentar'}
+        </button>
+        <button
+          onClick={() => onResolved(tx.id)}
+          disabled={busy}
+          className="text-xs px-3 py-1.5 rounded-md bg-[#f0f7ff] hover:bg-[#e0f0ff] text-[#005DB4] font-medium disabled:opacity-50"
+        >
+          Comprobado
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function OverpaymentRow({
+  tx,
+  onResolved,
+  busy,
+}: {
+  tx: AnomalyTx;
+  onResolved: (id: string) => void;
+  busy: boolean;
+}) {
+  const expected = parseFloat(tx.amount_expected);
+  const paid = parseFloat(tx.amount_paid);
+  const excess = parseFloat(tx.excess);
+  return (
+    <div className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
+          <span className="text-xs font-medium text-[#1a1a1a] truncate">
+            {tx.project_name || tx.project_id.slice(0, 8)}
+          </span>
+          <span className="text-xs text-[#9ca3af]">·</span>
+          <span className="text-xs text-[#6b7280] truncate">{tx.reason || '—'}</span>
+        </div>
+        <div className="text-xs text-[#6b7280] flex items-center gap-3 flex-wrap">
+          <span>
+            Pagó <span className="font-mono text-[#1a1a1a]">{paid.toFixed(2)}</span> / {expected.toFixed(2)} USDC
+          </span>
+          <span className="inline-flex items-center gap-1 text-amber-700 font-mono font-semibold">
+            +{excess.toFixed(2)} excedente
+          </span>
+          <span className="text-[#9ca3af]">{fmtDate(tx.created_at)}</span>
+        </div>
+        <div className="text-[10px] text-[#9ca3af] font-mono mt-1 break-all">tx {tx.id}</div>
+      </div>
+      <button
+        onClick={() => onResolved(tx.id)}
+        disabled={busy}
+        className="text-xs px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium disabled:opacity-50 shrink-0"
+      >
+        {busy ? '…' : 'Comprobado'}
+      </button>
     </div>
   );
 }

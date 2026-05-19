@@ -9,21 +9,6 @@ interface TreasuryStatus {
   created_at?: string;
 }
 
-interface RefundableTx {
-  id: string;
-  status: string;
-  amount_expected: string;
-  amount_paid: string;
-  excess: string;
-  wallet_pubkey: string | null;
-  crypto_tx_hash: string | null;
-  forward_tx_hash: string | null;
-  created_at: string;
-  project_id: string;
-  project_name: string | null;
-  reason: string;
-}
-
 const NETWORK = (process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'TESTNET').toUpperCase();
 const EXPERT_SEG = NETWORK === 'MAINNET' ? 'public' : 'testnet';
 const isMainnet = NETWORK === 'MAINNET';
@@ -31,19 +16,18 @@ const isMainnet = NETWORK === 'MAINNET';
 export default function AdminTreasuryPage() {
   const [status, setStatus] = useState<TreasuryStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Setup inicial (cuando todavía no hay treasury) — testnet automático, mainnet requiere secret
   const [setupSecret, setSetupSecret] = useState('');
   const [setupRunning, setSetupRunning] = useState(false);
 
-  const [refundables, setRefundables] = useState<RefundableTx[] | null>(null);
-
-  const [txId, setTxId] = useState('');
-  const [dest, setDest] = useState('');
-  const [amount, setAmount] = useState('');
-  const [refundRunning, setRefundRunning] = useState(false);
-  const [refundResult, setRefundResult] = useState<{ ok: boolean; msg: string } | null>(null);
-
-  const formRef = useRef<HTMLFormElement | null>(null);
-  const destRef = useRef<HTMLInputElement | null>(null);
+  // Rotate (cambiar treasury existente)
+  const [showRotate, setShowRotate] = useState(false);
+  const [rotatePubkey, setRotatePubkey] = useState('');
+  const [rotateSecret, setRotateSecret] = useState('');
+  const [rotateRunning, setRotateRunning] = useState(false);
+  const [rotateResult, setRotateResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const rotatePubRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -55,30 +39,16 @@ export default function AdminTreasuryPage() {
     }
   }, []);
 
-  const loadRefundables = useCallback(async () => {
-    try {
-      const r = await adminFetch<{ data: { transactions: RefundableTx[] } }>(
-        '/api/proxy/refundable',
-      );
-      setRefundables(r.data.transactions);
-    } catch (e: unknown) {
-      // No bloquea — la página sigue mostrando el resto
-      console.error('refundable list failed', e);
-      setRefundables([]);
-    }
-  }, []);
-
   useEffect(() => {
     load();
-    loadRefundables();
-  }, [load, loadRefundables]);
+  }, [load]);
 
   const setupTreasury = async () => {
     if (isMainnet && !setupSecret.trim()) {
       setError('En mainnet hay que pasar una secret key pre-fondeada (≥ 2 XLM).');
       return;
     }
-    if (!confirm(`¿Crear la treasury wallet?\n\n${isMainnet ? 'Mainnet: usa la secret key provista.' : 'Testnet: se fondea con Friendbot.'}\n\nEsta operación es única — una vez creada, no se reemplaza desde acá.`)) return;
+    if (!confirm(`¿Crear la treasury wallet?\n\n${isMainnet ? 'Mainnet: usa la secret key provista.' : 'Testnet: se fondea con Friendbot.'}\n\nOperación única — una vez creada, para cambiarla usá "Rotar treasury".`)) return;
     setSetupRunning(true);
     setError(null);
     try {
@@ -93,55 +63,57 @@ export default function AdminTreasuryPage() {
     }
   };
 
-  const fillFromRefundable = (tx: RefundableTx) => {
-    setTxId(tx.id);
-    setAmount(parseFloat(tx.excess).toFixed(2));
-    setDest('');
-    setRefundResult(null);
-    // Scrollea al form y focusea el campo destino (lo único que falta tipear)
-    setTimeout(() => {
-      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      destRef.current?.focus();
-    }, 50);
+  const openRotate = () => {
+    setShowRotate(true);
+    setRotateResult(null);
+    setRotatePubkey('');
+    setRotateSecret('');
+    setTimeout(() => rotatePubRef.current?.focus(), 50);
   };
 
-  const submitRefund = async (e: React.FormEvent) => {
+  const submitRotate = async (e: React.FormEvent) => {
     e.preventDefault();
-    setRefundResult(null);
-    const parsed = parseFloat(amount);
-    if (isNaN(parsed) || parsed <= 0) {
-      setRefundResult({ ok: false, msg: 'Monto inválido' });
+    setRotateResult(null);
+    const pk = rotatePubkey.trim();
+    const sk = rotateSecret.trim();
+    if (!/^G[A-Z2-7]{55}$/.test(pk)) {
+      setRotateResult({ ok: false, msg: 'public_key inválida (G + 55 chars)' });
       return;
     }
-    if (!/^G[A-Z2-7]{55}$/.test(dest.trim())) {
-      setRefundResult({ ok: false, msg: 'Wallet destino inválida (debe empezar con G y tener 56 chars)' });
+    if (sk && !/^S[A-Z2-7]{55}$/.test(sk)) {
+      setRotateResult({ ok: false, msg: 'secret_key inválida (S + 55 chars)' });
       return;
     }
-    if (!confirm(`¿Confirmar reembolso?\n\nTx: ${txId}\nDestino: ${dest.slice(0, 12)}…${dest.slice(-6)}\nMonto: ${parsed.toFixed(2)} USDC\n\nLos fondos salen de la treasury y se marca la tx como refunded.`)) return;
+    if (!confirm(
+      `⚠️ ROTAR TREASURY\n\n` +
+      `Nueva pubkey: ${pk}\n` +
+      `Secret incluida: ${sk ? 'sí' : 'no (solo recibirá)'}\n\n` +
+      `Esto cambia inmediatamente dónde van los fees + cobros Scale futuros.\n` +
+      `Asegurate de que la nueva wallet tenga trustline USDC.\n\n` +
+      `La treasury anterior queda con sus fondos históricos — moverlos es manual.\n\n` +
+      `¿Confirmar rotación?`,
+    )) return;
 
-    setRefundRunning(true);
+    setRotateRunning(true);
     try {
-      const r = await adminFetch<{ success: boolean; hash?: string; message?: string }>(
-        '/api/proxy/refund',
+      const r = await adminFetch<{ success: boolean; new_treasury?: string; message?: string }>(
+        '/api/proxy/treasury/rotate',
         {
           method: 'POST',
           body: JSON.stringify({
-            transaction_id: txId.trim(),
-            destination_wallet: dest.trim(),
-            amount: parsed.toFixed(7),
+            public_key: pk,
+            secret_key: sk || undefined,
           }),
         },
       );
-      setRefundResult({ ok: true, msg: `${r.message || 'Reembolso emitido'} · hash ${r.hash?.slice(0, 12) ?? '—'}…` });
-      setTxId('');
-      setDest('');
-      setAmount('');
-      // Refresh list — el tx ya no debería aparecer (pasa a status=refunded)
-      loadRefundables();
+      setRotateResult({ ok: true, msg: r.message || `Treasury rotada a ${r.new_treasury?.slice(0, 10)}…` });
+      setRotatePubkey('');
+      setRotateSecret('');
+      await load();
     } catch (e: unknown) {
-      setRefundResult({ ok: false, msg: e instanceof Error ? e.message : String(e) });
+      setRotateResult({ ok: false, msg: e instanceof Error ? e.message : String(e) });
     } finally {
-      setRefundRunning(false);
+      setRotateRunning(false);
     }
   };
 
@@ -155,7 +127,7 @@ export default function AdminTreasuryPage() {
         </div>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Treasury</h1>
         <p className="text-[#6b7280] text-sm mt-1">
-          Wallet que recibe fees + excedentes de overpaids. Desde acá se emiten reembolsos manuales a clientes que pagaron de más.
+          Wallet que recibe fees + excedentes de overpaids + cobros de Scale ($25/mes).
         </p>
       </header>
 
@@ -165,8 +137,20 @@ export default function AdminTreasuryPage() {
         </div>
       )}
 
+      {/* ── Status ───────────────────────────────────────────────────── */}
       <section className="bg-white border border-[#e5e7eb] rounded-2xl p-5 sm:p-6 mb-6">
-        <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-3">Estado</h2>
+        <div className="flex items-start justify-between gap-2 mb-3">
+          <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono">Estado</h2>
+          {status?.exists && (
+            <button
+              onClick={openRotate}
+              className="text-xs px-2.5 py-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 font-medium"
+            >
+              Rotar treasury
+            </button>
+          )}
+        </div>
+
         {status === null ? (
           <div className="text-[#9ca3af] text-sm">Cargando…</div>
         ) : status.exists ? (
@@ -213,155 +197,95 @@ export default function AdminTreasuryPage() {
         )}
       </section>
 
-      <section className="mb-6">
-        <div className="flex items-end justify-between gap-3 mb-3">
-          <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono">
-            Reembolsos pendientes
-          </h2>
-          <button
-            onClick={loadRefundables}
-            className="text-[10px] uppercase tracking-widest text-[#005DB4] hover:text-[#0047a0] font-mono"
-          >
-            Refrescar
-          </button>
-        </div>
-        {refundables === null ? (
-          <div className="bg-white border border-[#e5e7eb] rounded-2xl p-5 text-[#9ca3af] text-sm">Cargando…</div>
-        ) : refundables.length === 0 ? (
-          <div className="bg-white border border-[#e5e7eb] rounded-2xl p-5 text-center">
-            <p className="text-sm text-[#6b7280]">Ningún cliente pagó de más sin recuperar.</p>
-            <p className="text-xs text-[#9ca3af] mt-1">Cuando aparezca uno, vas a poder reembolsarlo con un click.</p>
-          </div>
-        ) : (
-          <div className="bg-white border border-[#e5e7eb] rounded-2xl overflow-hidden">
-            <div className="divide-y divide-[#e5e7eb]">
-              {refundables.map(tx => {
-                const expected = parseFloat(tx.amount_expected);
-                const paid = parseFloat(tx.amount_paid);
-                const excess = parseFloat(tx.excess);
-                return (
-                  <div key={tx.id} className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-xs font-medium text-[#1a1a1a] truncate">
-                          {tx.project_name || tx.project_id.slice(0, 8)}
-                        </span>
-                        <span className="text-xs text-[#9ca3af]">·</span>
-                        <span className="text-xs text-[#6b7280] truncate">{tx.reason || '—'}</span>
-                      </div>
-                      <div className="flex items-center gap-3 text-xs flex-wrap">
-                        <span className="text-[#9ca3af]">
-                          Pagó <span className="font-mono text-[#1a1a1a]">{paid.toFixed(2)}</span> de <span className="font-mono">{expected.toFixed(2)}</span>
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-amber-700 font-mono">
-                          +{excess.toFixed(2)} a devolver
-                        </span>
-                        <span className="text-[#9ca3af] hidden sm:inline">
-                          {fmtDate(tx.created_at)}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-[#9ca3af] font-mono mt-1 truncate">
-                        tx {tx.id}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => fillFromRefundable(tx)}
-                      className="shrink-0 text-xs px-3 py-1.5 rounded-md bg-[#f0f7ff] hover:bg-[#e0f0ff] text-[#005DB4] font-medium"
-                    >
-                      Reembolsar ↓
-                    </button>
-                  </div>
-                );
-              })}
+      {/* ── Rotate form (modal-ish inline) ───────────────────────────── */}
+      {showRotate && status?.exists && (
+        <section className="bg-white border border-amber-500/30 ring-1 ring-amber-500/10 rounded-2xl p-5 sm:p-6 mb-6">
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div>
+              <h2 className="text-[10px] uppercase tracking-widest text-amber-700 font-mono mb-1">
+                ⚠ Rotar treasury — operación de emergencia
+              </h2>
+              <p className="text-xs text-[#6b7280]">
+                Solo para casos de filtración / hackeo de la secret actual. Generá una wallet nueva en Lobstr/Stellar Lab, agregale trustline USDC, y pegá su pubkey acá. El billing project se sincroniza automáticamente.
+              </p>
             </div>
+            <button
+              onClick={() => setShowRotate(false)}
+              className="text-[#9ca3af] hover:text-[#1a1a1a] text-xl leading-none -mt-1"
+              aria-label="Cerrar"
+            >
+              ×
+            </button>
           </div>
-        )}
-      </section>
+          <form onSubmit={submitRotate} className="space-y-4 mt-4">
+            <div>
+              <label className="block text-sm font-medium text-[#6b7280] mb-1.5">Nueva public key (G…)</label>
+              <input
+                ref={rotatePubRef}
+                type="text"
+                value={rotatePubkey}
+                onChange={e => setRotatePubkey(e.target.value)}
+                placeholder="GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                required
+                spellCheck={false}
+                className="w-full px-3 py-2 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-sm font-mono focus:outline-none focus:border-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b7280] mb-1.5">
+                Secret key <span className="text-[#9ca3af] font-normal">(opcional — recomendado dejarla vacía)</span>
+              </label>
+              <input
+                type="password"
+                value={rotateSecret}
+                onChange={e => setRotateSecret(e.target.value)}
+                placeholder="S… (opcional)"
+                spellCheck={false}
+                className="w-full px-3 py-2 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-sm font-mono focus:outline-none focus:border-amber-500"
+              />
+              <p className="text-[11px] text-[#9ca3af] mt-1">
+                Sin secret = más seguro (la guardás vos en vault). Con secret = backend puede firmar refunds automáticos en el futuro.
+              </p>
+            </div>
 
-      <section className="bg-white border border-[#e5e7eb] rounded-2xl p-5 sm:p-6">
-        <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-1">Reembolso manual</h2>
-        <p className="text-xs text-[#6b7280] mb-4">
-          Se envían los fondos desde la treasury al destinatario, y la transacción queda marcada como <code className="bg-[#f0f7ff] px-1 rounded">refunded</code>.
-        </p>
-
-        <form ref={formRef} onSubmit={submitRefund} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-[#6b7280] mb-1.5">
-              Transaction ID
-              <span className="text-xs text-[#9ca3af] font-normal ml-1">
-                (clickea Reembolsar arriba para llenarlo automático)
-              </span>
-            </label>
-            <input
-              type="text"
-              value={txId}
-              onChange={e => setTxId(e.target.value)}
-              required
-              placeholder="uuid del cobro afectado"
-              className="w-full px-3 py-2 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-sm font-mono focus:outline-none focus:border-[#005DB4]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-[#6b7280] mb-1.5">Wallet destino (G…)</label>
-            <input
-              ref={destRef}
-              type="text"
-              value={dest}
-              onChange={e => setDest(e.target.value)}
-              required
-              placeholder="GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-              className="w-full px-3 py-2 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-sm font-mono focus:outline-none focus:border-[#005DB4]"
-            />
-            <p className="text-xs text-[#9ca3af] mt-1">
-              La wallet del cliente que reclamó — la tiene que mandar él por soporte.
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-[#6b7280] mb-1.5">Monto USDC</label>
-            <input
-              type="number"
-              step="0.01"
-              min="0.01"
-              value={amount}
-              onChange={e => setAmount(e.target.value)}
-              required
-              placeholder="25.00"
-              className="w-full px-3 py-2 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-sm font-mono focus:outline-none focus:border-[#005DB4]"
-            />
-          </div>
-
-          {refundResult && (
-            <div
-              className={`p-3 rounded-lg border text-sm ${
-                refundResult.ok
+            {rotateResult && (
+              <div className={`p-2.5 rounded-lg border text-sm ${
+                rotateResult.ok
                   ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700'
                   : 'bg-rose-500/10 border-rose-500/20 text-rose-700'
-              }`}
-            >
-              {refundResult.msg}
-            </div>
-          )}
+              }`}>{rotateResult.msg}</div>
+            )}
 
-          <button
-            type="submit"
-            disabled={refundRunning || !status?.exists}
-            className="w-full sm:w-auto px-5 py-2 rounded-lg bg-[#005DB4] hover:bg-[#0047a0] text-white text-sm font-semibold disabled:opacity-50"
-          >
-            {refundRunning ? 'Enviando…' : status?.exists ? 'Emitir reembolso' : 'Treasury no creada'}
-          </button>
-        </form>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={rotateRunning || !rotatePubkey.trim()}
+                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {rotateRunning ? 'Rotando…' : 'Confirmar rotación'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowRotate(false)}
+                className="px-4 py-2 rounded-lg bg-[#f0f7ff] hover:bg-[#e0f0ff] text-[#005DB4] text-sm font-medium"
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
+      {/* ── Nota sobre refunds ──────────────────────────────────────── */}
+      <section className="bg-[#f0f7ff] border border-[#e5e7eb] rounded-2xl p-4 sm:p-5">
+        <h3 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-2">¿Y los refunds?</h3>
+        <p className="text-xs text-[#6b7280] leading-relaxed">
+          Los reembolsos a clientes que pagaron de más se resuelven <b>off-system</b> — muchos pagos vienen
+          desde Binance/exchanges donde la wallet origen no es del cliente. Para gestionarlos andá a{' '}
+          <code className="bg-white px-1.5 py-0.5 rounded text-[11px] border border-[#e5e7eb]">/admin/anomalies</code>{' '}
+          → sección "Overpaids" → clickeás <b>Comprobado</b> cuando hablaste con el cliente y resolviste por whatsapp, descontaste del próximo cobro, etc.
+        </p>
       </section>
     </div>
   );
-}
-
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleString([], {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }

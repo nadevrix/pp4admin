@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { adminFetch } from '@/lib/admin-fetch';
 
 interface Wallet {
@@ -43,9 +43,16 @@ export default function AdminWalletsPage() {
   const [summary, setSummary] = useState<BalancesSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [loadingBalances, setLoadingBalances] = useState(false);
+
+  // Form de registro manual
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [pubkey, setPubkey] = useState('');
+  const [secret, setSecret] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addResult, setAddResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const pubkeyRef = useRef<HTMLInputElement | null>(null);
 
   const loadWallets = useCallback(async () => {
     try {
@@ -67,7 +74,6 @@ export default function AdminWalletsPage() {
       setBalances(m);
       setSummary(r.data.summary);
     } catch (e: unknown) {
-      // No bloquea — la lista de wallets sigue mostrándose
       console.error('balances failed', e);
     } finally {
       setLoadingBalances(false);
@@ -84,17 +90,42 @@ export default function AdminWalletsPage() {
     return () => clearInterval(t);
   }, [loadWallets, loadBalances]);
 
-  const createWallet = async () => {
-    if (!confirm('¿Crear una wallet nueva en el pool? Se fondea con Friendbot (solo testnet).')) return;
-    setCreating(true);
-    setError(null);
+  const openAddForm = () => {
+    setShowAddForm(true);
+    setAddResult(null);
+    setPubkey('');
+    setSecret('');
+    setTimeout(() => pubkeyRef.current?.focus(), 50);
+  };
+
+  const submitAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const pk = pubkey.trim();
+    const sk = secret.trim();
+    if (!/^G[A-Z2-7]{55}$/.test(pk)) {
+      setAddResult({ ok: false, msg: 'public_key inválida (G + 55 chars)' });
+      return;
+    }
+    if (!/^S[A-Z2-7]{55}$/.test(sk)) {
+      setAddResult({ ok: false, msg: 'secret_key inválida (S + 55 chars)' });
+      return;
+    }
+    setAdding(true);
+    setAddResult(null);
     try {
-      await adminFetch('/api/proxy/wallets', { method: 'POST' });
+      const r = await adminFetch<{ wallet?: { wallet_index?: number } }>('/api/proxy/wallets', {
+        method: 'POST',
+        body: JSON.stringify({ public_key: pk, secret_key: sk }),
+      });
+      const idx = r.wallet?.wallet_index;
+      setAddResult({ ok: true, msg: `Wallet registrada con índice #${idx ?? '?'}` });
+      setPubkey('');
+      setSecret('');
       await Promise.all([loadWallets(), loadBalances()]);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setAddResult({ ok: false, msg: e instanceof Error ? e.message : String(e) });
     } finally {
-      setCreating(false);
+      setAdding(false);
     }
   };
 
@@ -130,18 +161,17 @@ export default function AdminWalletsPage() {
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Wallets</h1>
             <p className="text-[#6b7280] text-sm mt-1">
-              Pool de cobro + treasury. Balances en vivo desde Horizon.
+              Pool de cobro + treasury. Generá las wallets externamente (con trustline USDC + XLM) y registralas acá.
             </p>
           </div>
           <button
-            onClick={createWallet}
-            disabled={creating}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#005DB4] hover:bg-[#0047a0] text-white text-sm font-semibold disabled:opacity-50 transition-colors"
+            onClick={openAddForm}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#005DB4] hover:bg-[#0047a0] text-white text-sm font-semibold transition-colors"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
             </svg>
-            {creating ? 'Creando…' : 'Nueva wallet pool'}
+            Agregar wallet
           </button>
         </div>
       </header>
@@ -150,6 +180,82 @@ export default function AdminWalletsPage() {
         <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-700 text-sm">
           {error}
         </div>
+      )}
+
+      {showAddForm && (
+        <section className="mb-6 bg-white border border-[#005DB4]/30 ring-1 ring-[#005DB4]/10 rounded-2xl p-5 sm:p-6">
+          <div className="flex items-start justify-between gap-2 mb-3">
+            <div>
+              <h2 className="text-[10px] uppercase tracking-widest text-[#9ca3af] font-mono mb-1">Registrar nueva wallet pool</h2>
+              <p className="text-xs text-[#6b7280]">
+                Asegurate de que la wallet ya tenga <b>trustline USDC</b> y <b>≥ 2 XLM</b>. El sistema no hace operaciones Stellar — solo guarda el keypair.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowAddForm(false)}
+              className="text-[#9ca3af] hover:text-[#1a1a1a] text-xl leading-none -mt-1"
+              aria-label="Cerrar"
+            >
+              ×
+            </button>
+          </div>
+          <form onSubmit={submitAdd} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-[#6b7280] mb-1.5">Public key (G…)</label>
+              <input
+                ref={pubkeyRef}
+                type="text"
+                value={pubkey}
+                onChange={e => setPubkey(e.target.value)}
+                placeholder="GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                required
+                spellCheck={false}
+                autoCapitalize="characters"
+                className="w-full px-3 py-2 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-sm font-mono focus:outline-none focus:border-[#005DB4]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b7280] mb-1.5">Secret key (S…)</label>
+              <input
+                type="password"
+                value={secret}
+                onChange={e => setSecret(e.target.value)}
+                placeholder="SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                required
+                spellCheck={false}
+                className="w-full px-3 py-2 bg-[#f0f7ff] border border-[#e5e7eb] rounded-lg text-sm font-mono focus:outline-none focus:border-[#005DB4]"
+              />
+              <p className="text-[11px] text-[#9ca3af] mt-1">
+                Se guarda encriptada en la DB. El backend la usa para firmar forwards al merchant.
+              </p>
+            </div>
+
+            {addResult && (
+              <div className={`p-2.5 rounded-lg border text-sm ${
+                addResult.ok
+                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700'
+                  : 'bg-rose-500/10 border-rose-500/20 text-rose-700'
+              }`}>{addResult.msg}</div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={adding || !pubkey || !secret}
+                className="px-4 py-2 rounded-lg bg-[#005DB4] hover:bg-[#0047a0] text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {adding ? 'Registrando…' : 'Registrar wallet'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAddForm(false)}
+                className="px-4 py-2 rounded-lg bg-[#f0f7ff] hover:bg-[#e0f0ff] text-[#005DB4] text-sm font-medium"
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </section>
       )}
 
       {summary && (
@@ -182,7 +288,7 @@ export default function AdminWalletsPage() {
           <Section title={`Pool (${poolWallets.length})`}>
             {poolWallets.length === 0 ? (
               <div className="bg-white border border-[#e5e7eb] rounded-2xl p-6 text-center text-[#9ca3af] text-sm">
-                No hay wallets en el pool. Creá la primera arriba.
+                No hay wallets en el pool. Agregá la primera desde arriba.
               </div>
             ) : (
               <WalletTable
