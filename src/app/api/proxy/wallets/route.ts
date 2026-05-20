@@ -6,9 +6,9 @@ export async function GET() {
   return callHub('/api/admin/wallets');
 }
 
-export async function POST() {
-  // Create a new pool wallet (Friendbot testnet)
-  return callHub('/api/admin/wallets', { method: 'POST' });
+export async function POST(request: Request) {
+  const body = await request.text();
+  return callHub('/api/admin/wallets', { method: 'POST', body });
 }
 
 export async function DELETE(request: Request) {
